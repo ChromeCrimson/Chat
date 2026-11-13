@@ -29,5 +29,5 @@ A deliberately ordinary-looking chat site with an unreasonably thorough filing s
 
 Right-click messages, rooms, members, or the server for available actions. Text fields keep the browser's regular copy/paste menu. Motion effects honor `prefers-reduced-motion`.
 
-Voice rooms remain visual hangout placeholders; voice calling needs a separate media service.
+Voice rooms and GIF uploads are not included. Image attachments accept common still-image formats.
 
