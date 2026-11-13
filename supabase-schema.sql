@@ -3,12 +3,13 @@ create extension if not exists pgcrypto;
 
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
-  display_name text not null default 'New member',
-  status text not null default 'Around',
+  display_name text not null check (length(trim(display_name)) > 0),
+  status text not null default '',
   about text not null default '',
   theme text not null default 'paperwork',
   role text not null default 'member' check (role in ('member', 'moderator')),
   username_changed_at timestamptz,
+  account_disabled boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -107,20 +108,20 @@ drop trigger if exists profiles_username_cooldown on public.profiles;
 create trigger profiles_username_cooldown before update on public.profiles for each row execute function public.enforce_username_cooldown();
 
 drop policy if exists "Members read room messages" on public.messages;
-create policy "Members read room messages" on public.messages for select to authenticated using (true);
+create policy "Members read room messages" on public.messages for select to authenticated using (not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Members send as themselves" on public.messages;
-create policy "Members send as themselves" on public.messages for insert to authenticated with check (auth.uid() = user_id and not exists (select 1 from public.member_moderation where user_id = auth.uid() and muted_until > now()));
+create policy "Members send as themselves" on public.messages for insert to authenticated with check (auth.uid() = user_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled) and not exists (select 1 from public.member_moderation where user_id = auth.uid() and muted_until > now()));
 drop policy if exists "Members edit their messages" on public.messages;
-create policy "Members edit their messages" on public.messages for update to authenticated using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "Members edit their messages" on public.messages for update to authenticated using (auth.uid() = user_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled)) with check (auth.uid() = user_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Members delete their messages" on public.messages;
-create policy "Members delete their messages" on public.messages for delete to authenticated using (auth.uid() = user_id);
+create policy "Members delete their messages" on public.messages for delete to authenticated using (auth.uid() = user_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Moderators delete room messages" on public.messages;
 create policy "Moderators delete room messages" on public.messages for delete to authenticated using (exists (select 1 from public.profiles where id = auth.uid() and role = 'moderator'));
 
 drop policy if exists "Members read reactions" on public.message_reactions;
 create policy "Members read reactions" on public.message_reactions for select to authenticated using (true);
 drop policy if exists "Members react as themselves" on public.message_reactions;
-create policy "Members react as themselves" on public.message_reactions for insert to authenticated with check (auth.uid() = user_id);
+create policy "Members react as themselves" on public.message_reactions for insert to authenticated with check (auth.uid() = user_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Members remove their reactions" on public.message_reactions;
 create policy "Members remove their reactions" on public.message_reactions for delete to authenticated using (auth.uid() = user_id);
 
@@ -132,13 +133,13 @@ create policy "Moderators edit server settings" on public.workspace_settings for
 alter table public.direct_messages enable row level security;
 alter table public.member_moderation enable row level security;
 drop policy if exists "Participants read direct messages" on public.direct_messages;
-create policy "Participants read direct messages" on public.direct_messages for select to authenticated using (auth.uid() = sender_id or auth.uid() = recipient_id);
+create policy "Participants read direct messages" on public.direct_messages for select to authenticated using ((auth.uid() = sender_id or auth.uid() = recipient_id) and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Members send direct messages to real members" on public.direct_messages;
-create policy "Members send direct messages to real members" on public.direct_messages for insert to authenticated with check (auth.uid() = sender_id and sender_id <> recipient_id and exists (select 1 from public.profiles where id = recipient_id) and not exists (select 1 from public.member_moderation where user_id = auth.uid() and muted_until > now()));
+create policy "Members send direct messages to real members" on public.direct_messages for insert to authenticated with check (auth.uid() = sender_id and sender_id <> recipient_id and exists (select 1 from public.profiles where id = recipient_id and not account_disabled) and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled) and not exists (select 1 from public.member_moderation where user_id = auth.uid() and muted_until > now()));
 drop policy if exists "Senders edit their direct messages" on public.direct_messages;
-create policy "Senders edit their direct messages" on public.direct_messages for update to authenticated using (auth.uid() = sender_id) with check (auth.uid() = sender_id);
+create policy "Senders edit their direct messages" on public.direct_messages for update to authenticated using (auth.uid() = sender_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled)) with check (auth.uid() = sender_id and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Participants delete direct messages" on public.direct_messages;
-create policy "Participants delete direct messages" on public.direct_messages for delete to authenticated using (auth.uid() = sender_id or auth.uid() = recipient_id);
+create policy "Participants delete direct messages" on public.direct_messages for delete to authenticated using ((auth.uid() = sender_id or auth.uid() = recipient_id) and not exists (select 1 from public.profiles where id = auth.uid() and account_disabled));
 drop policy if exists "Members see own moderation state" on public.member_moderation;
 create policy "Members see own moderation state" on public.member_moderation for select to authenticated using (auth.uid() = user_id or exists (select 1 from public.profiles where id = auth.uid() and role = 'moderator'));
 
@@ -148,14 +149,20 @@ begin
   if not exists (select 1 from public.profiles where id = auth.uid() and role = 'moderator') then
     raise exception 'Moderator access required.';
   end if;
-  if target_user = auth.uid() and moderation_action in ('demote', 'timeout') then
-    raise exception 'You cannot demote or timeout your own account.';
+  if target_user = auth.uid() and moderation_action in ('demote', 'timeout', 'disable') then
+    raise exception 'You cannot demote, timeout, or disable your own account.';
   end if;
+  if not exists (select 1 from public.profiles where id = target_user) then raise exception 'Member not found.'; end if;
   if moderation_action = 'promote' then
     update public.profiles set role = 'moderator' where id = target_user;
   elsif moderation_action = 'demote' then
     if (select count(*) from public.profiles where role = 'moderator') <= 1 then raise exception 'The last moderator cannot be demoted.'; end if;
     update public.profiles set role = 'member' where id = target_user;
+  elsif moderation_action = 'disable' then
+    if exists (select 1 from public.profiles where id = target_user and role = 'moderator') then raise exception 'Remove moderator access before disabling this account.'; end if;
+    update public.profiles set account_disabled = true where id = target_user;
+  elsif moderation_action = 'enable' then
+    update public.profiles set account_disabled = false where id = target_user;
   elsif moderation_action in ('warn', 'timeout', 'clear_timeout') then
     insert into public.member_moderation(user_id, muted_until, warning_count, last_reason, updated_by)
     values (target_user,
