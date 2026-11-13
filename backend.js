@@ -527,8 +527,9 @@ async function authenticateNocturne(mode) {
   } catch (err) { if (error) error.textContent = err.message || "Could not sign in. Check the details and try again."; submitButtons.forEach(button => { button.disabled = false; }); return; }
   if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); submitButtons.forEach(button => { button.disabled = false; }); return; }
   if (result.data.session) {
-    await applyNocturneSession(result.data.session);
-    if (!vantaSession) return;
+    try { await applyNocturneSession(result.data.session); }
+    catch (err) { if (error) error.textContent = "Account connected, but profile sync failed: " + (err.message || "try again"); submitButtons.forEach(button => { button.disabled = false; }); accountUI(); return; }
+    if (!vantaSession) { submitButtons.forEach(button => { button.disabled = false; }); return; }
     closeDialog(); toast(mode === "signup" ? "YOUR DEPARTMENT PROFILE is ready" : "Welcome back");
   } else showDialog("Check your email", `<p>We sent a verification link to <b>${esc(email)}</b>. Verify it, then sign in from your profile.</p><button class="dialog-btn primary" onclick="closeDialog();openProfile()">Back to profile</button>`);
 }
