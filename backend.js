@@ -516,14 +516,16 @@ async function authenticateNocturne(mode) {
   if (!email || !password) { if (error) error.textContent = "Add your email and password to continue."; return; }
   if (mode === "signup" && !name) { if (error) error.textContent = "Choose a username to create your profile."; document.querySelector("#profileAuthName")?.focus(); return; }
   if (mode === "signup" && password.length < 8) { if (error) error.textContent = "Use at least 8 characters for your password."; return; }
-  if (error) error.textContent = "";
+  if (error) error.textContent = mode === "signup" ? "Creating your account…" : "Signing in…";
+  const submitButtons = [...(document.querySelectorAll("#dialog .dialog-actions button"))];
+  submitButtons.forEach(button => { button.disabled = true; });
   let result;
   try {
     result = mode === "signup"
       ? await vantaDb.auth.signUp({ email, password, options: { data: { display_name: name } } })
       : await vantaDb.auth.signInWithPassword({ email, password });
-  } catch (err) { if (error) error.textContent = err.message || "Could not sign in. Check the details and try again."; return; }
-  if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); return; }
+  } catch (err) { if (error) error.textContent = err.message || "Could not sign in. Check the details and try again."; submitButtons.forEach(button => { button.disabled = false; }); return; }
+  if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); submitButtons.forEach(button => { button.disabled = false; }); return; }
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
     if (!vantaSession) return;
