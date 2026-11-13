@@ -142,6 +142,12 @@ async function loadNocturneRoom() {
     const name = message.profiles?.display_name || "Member";
     return { id: message.id, user: name, role: message.profiles?.role || "member", initial: initials(name), color: colorFor(name), time: new Date(message.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }), text: message.content, files: message.files || [], replyTo: message.reply_to, reactions: Object.entries(counts[message.id] || {}).map(([emoji, count]) => emoji + " " + count), remote: true };
   });
+  const latest = rows.at(-1);
+  if (latest && lastRoomNotificationId && latest.id !== lastRoomNotificationId && latest.user_id !== vantaSession.user.id && settingValue("desktopNotifications") && settingValue("channelNotifications", true) && window.Notification?.permission === "granted") {
+    const mentioned = latest.content?.toLowerCase().includes("@" + (profile.name || "").replace(/\s+/g, "").toLowerCase());
+    if (!settingValue("mentionsOnly") || mentioned) new Notification(`#${channelLabel(current)} · ${latest.profiles?.display_name || "A member"}`, { body: latest.content || "Sent an attachment" });
+  }
+  lastRoomNotificationId = latest?.id || null;
   render();
 }
 
@@ -160,7 +166,7 @@ async function startNocturnePresence() {
   if (presenceRealtime) await vantaDb.removeChannel(presenceRealtime);
   presenceRealtime = vantaDb.channel("vanta-presence", { config: { presence: { key: vantaSession.user.id } } })
     .on("presence", { event: "sync" }, renderNocturneMembers)
-    .subscribe(status => { if (status === "SUBSCRIBED") presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole }); });
+    .subscribe(status => { if (status === "SUBSCRIBED" && settingValue("showOnline", true)) presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole }); });
 }
 
 function renderNocturneMembers() {
@@ -178,6 +184,8 @@ function renderNocturneMembers() {
 
 function selectChannel(element) {
   current = element.dataset.channel;
+  clearChannelUnread(current);
+  lastRoomNotificationId = null;
   document.querySelectorAll(".nav-item[data-channel]").forEach(item => item.classList.toggle("active", item === element));
   const label = channelLabel(current);
   document.querySelector("#channelTitle").textContent = label;
@@ -249,7 +257,8 @@ async function saveProfile() {
 function setTheme(id) {
   document.documentElement.dataset.theme = id; localStorage.setItem("vanta-theme", id);
   if (vantaDb && vantaSession) vantaDb.from("profiles").update({ theme: id, updated_at: new Date().toISOString() }).eq("id", vantaSession.user.id).then(({ error }) => { if (error) toast("Theme saved here; account sync failed: " + error.message); });
-  openThemes(); toast(`${themes.find(theme => theme[0] === id)[1]} theme applied`);
+  if (currentSettingsSection === "appearance") renderSettingsSection("appearance"); else openThemes();
+  toast(`${themes.find(theme => theme[0] === id)[1]} theme applied`);
 }
 
 async function saveEdit(id) {
@@ -430,7 +439,8 @@ document.addEventListener("contextmenu", event => {
     const own = message.user === profile.name, items = [
       { label: "Reply in room", action: () => contextReply(id) },
       { label: "Add reaction", action: () => contextReact(id) },
-      { label: message.pinned ? "Remove from pinboard" : "Save to pinboard", action: () => contextPin(id) }
+      { label: message.pinned ? "Remove from pinboard" : "Save to pinboard", action: () => contextPin(id) },
+      { label: "Copy message", action: () => copyText(message.text, "Message copied") }
     ];
     if (own) items.push({ separator: true }, { label: "Edit message", action: () => contextEdit(id) });
     if (own || vantaRole === "moderator") items.push({ label: "Delete message", danger: true, action: () => deleteMessage(id) });
@@ -438,7 +448,7 @@ document.addEventListener("contextmenu", event => {
   }
   if (roomElement) {
     const name = roomElement.dataset.channel;
-    showContextMenu(event, "ROOM", [{ label: "Open #" + channelLabel(name), action: () => selectChannel(roomElement) }, { label: "Copy room name", action: () => copyText("#" + name, "Room name copied") }]); return;
+    showContextMenu(event, "ROOM", [{ label: "Open #" + channelLabel(name), action: () => selectChannel(roomElement) }, { label: "Mark as unread", action: () => markChannelUnread(name) }, { label: "Copy room name", action: () => copyText("#" + name, "Room name copied") }]); return;
   }
   if (dmElement) {
     const name = dmElement.dataset.name || dmElement.querySelector(".nav-label")?.textContent || "Member";
@@ -505,6 +515,8 @@ let currentDM = null;
 let currentDMReply = null;
 let dmRealtime = null;
 let vantaProfile = null;
+let currentSettingsSection = null;
+let lastRoomNotificationId = null;
 
 function openAccount() { openProfile(); }
 
@@ -550,16 +562,101 @@ async function openProfile() {
     } catch (error) { toast("Could not check sign-in status: " + error.message); }
   }
   accountUI();
-  const auth = vantaSession
-    ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT</span><h3>Signed in</h3></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div><label class="field">EMAIL</label><div class="inline-field"><input class="field-input" id="profileEmail" type="email" autocomplete="email" value="${esc(vantaSession.user.email || "")}"><button class="dialog-btn" onclick="updateAccountEmail()">Update email</button></div><label class="field">PASSWORD</label><div class="inline-field"><input class="field-input" id="profileNewPassword" type="password" autocomplete="new-password" minlength="8" placeholder="Enter a new password"><button class="dialog-btn" onclick="updateAccountPassword()">Change password</button></div><div id="accountUpdateStatus" class="form-error" aria-live="polite"></div></div>`
-    : vantaDb
-      ? `<div class="profile-account"><span class="eyebrow">ACCOUNT</span><h3>Sign in or create an account</h3><label class="field">USERNAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Choose a username (new accounts)"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="Your password"><div id="profileAuthError" class="form-error" aria-live="polite"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
-      : `<div class="profile-account"><span class="eyebrow">ACCOUNT SETUP</span><h3>Chat requires an account</h3><p>Connect the shared chat service to create an account and talk with other members.</p><a class="dialog-btn" href="https://supabase.com/dashboard" target="_blank" rel="noopener">Open Supabase setup ↗</a></div>`;
-  if (!vantaSession) { showDialog("Your profile", auth); return; }
+  if (!vantaSession) { openSettings("account"); return; }
+  showDialog("Your profile", `<div class="profile-hero"><div class="profile-avatar">${esc(initials(profile.name))}</div><div><span class="eyebrow">YOUR PROFILE</span><h3>${esc(profile.name)}</h3><p>${esc(profile.status || "")}</p></div></div><div class="profile-section"><div class="profile-card-head"><span class="eyebrow">BIO</span></div><p>${esc(profile.about || "No bio added yet.")}</p><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog();openSettings('account')">Settings</button><button class="dialog-btn primary" onclick="closeDialog();openSettings('profile')">Edit profile</button></div></div>`);
+}
+
+function openSettings(section = "profile") {
+  currentSettingsSection = vantaSession ? section : "account";
+  const tabs = vantaSession
+    ? [["profile", "Profile"], ["account", "Account"], ["appearance", "Appearance"], ["notifications", "Notifications"], ["privacy", "Privacy"], ["accessibility", "Accessibility"]]
+    : [["account", "Account"]];
+  showDialog("Settings", `<div class="settings-layout"><nav class="settings-nav" aria-label="Settings sections">${tabs.map(([id, label]) => `<button class="settings-tab ${id === currentSettingsSection ? "selected" : ""}" data-settings-tab="${id}" onclick="renderSettingsSection('${id}')">${label}</button>`).join("")}</nav><section class="settings-content" id="settingsContent"></section></div>`);
+  renderSettingsSection(currentSettingsSection);
+}
+
+function closeDialog() {
+  document.querySelector("#overlay")?.classList.remove("open");
+  currentSettingsSection = null;
+}
+
+function unreadChannels() {
+  try { return JSON.parse(localStorage.getItem("department-unread-channels") || "[]"); }
+  catch { return []; }
+}
+
+function updateUnreadChannels() {
+  const unread = new Set(unreadChannels());
+  document.querySelectorAll(".nav-item[data-channel]").forEach(item => item.classList.toggle("unread", unread.has(item.dataset.channel) && item.dataset.channel !== current));
+}
+
+function markChannelUnread(name) {
+  const unread = new Set(unreadChannels()); unread.add(name);
+  localStorage.setItem("department-unread-channels", JSON.stringify([...unread]));
+  updateUnreadChannels(); toast("Room marked unread");
+}
+
+function clearChannelUnread(name) {
+  const unread = new Set(unreadChannels()); unread.delete(name);
+  localStorage.setItem("department-unread-channels", JSON.stringify([...unread]));
+  updateUnreadChannels();
+}
+
+function settingValue(key, fallback = false) {
+  const saved = localStorage.getItem("department-setting-" + key);
+  return saved === null ? fallback : saved === "true";
+}
+
+function setSetting(key, value) {
+  localStorage.setItem("department-setting-" + key, String(value));
+  if (key === "reduceMotion") document.documentElement.classList.toggle("reduce-motion", value);
+  if (key === "compactChat") document.documentElement.classList.toggle("compact-chat", value);
+  if (key === "channelNotifications") notify = value;
+  if (key === "showOnline" && vantaSession) startNocturnePresence();
+  if (key === "shareTyping" && !value && presenceRealtime && vantaSession) presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole, typing: false });
+  renderSettingsSection(currentSettingsSection);
+}
+
+function toggleNotify(button) {
+  const next = !settingValue("channelNotifications", true);
+  setSetting("channelNotifications", next);
+  button?.classList.toggle("active", next);
+  toast(next ? "Room notifications on" : "Room notifications paused");
+}
+
+function settingRow(key, title, description, fallback = false) {
+  const enabled = settingValue(key, fallback);
+  return `<div class="setting-row"><span><strong>${title}</strong><small>${description}</small></span><button class="setting-switch ${enabled ? "on" : ""}" role="switch" aria-checked="${enabled}" onclick="setSetting('${key}',${!enabled})">${enabled ? "On" : "Off"}</button></div>`;
+}
+
+function renderSettingsSection(section) {
+  if (!vantaSession) section = "account";
+  currentSettingsSection = section;
+  document.querySelectorAll("[data-settings-tab]").forEach(tab => tab.classList.toggle("selected", tab.dataset.settingsTab === section));
+  const content = document.querySelector("#settingsContent");
+  if (!content) return;
   const cooldown = vantaProfile?.username_changed_at ? Date.parse(vantaProfile.username_changed_at) + 86400000 : 0;
-  const locked = vantaSession && cooldown > Date.now();
-  const lockNote = locked ? `<p class="cooldown-note">Username changes unlock in ${formatDuration(cooldown - Date.now())}.</p>` : "";
-  showDialog("Your profile", `<div class="profile-section"><div class="profile-card-head"><span class="eyebrow">PROFILE SETTINGS</span><button class="dialog-btn" onclick="openThemes()">Themes</button></div><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Choose a username">${lockNote}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="Your status"><label class="field">BIO</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="220" placeholder="A short bio">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div></div>${auth}`);
+  const locked = cooldown > Date.now();
+  if (section === "profile") {
+    content.innerHTML = `<span class="eyebrow">PROFILE</span><h3>Profile details</h3><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Choose a username">${locked ? `<p class="cooldown-note">Username changes unlock in ${formatDuration(cooldown - Date.now())}.</p>` : ""}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="Your status"><label class="field">BIO</label><textarea class="field-input" id="profileAbout" rows="4" maxlength="220" placeholder="A short bio">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div>`;
+  } else if (section === "account") {
+    content.innerHTML = `<span class="eyebrow">ACCOUNT</span><h3>${vantaSession ? "Sign-in details" : "Sign in or create an account"}</h3>${vantaSession ? `<label class="field">EMAIL</label><div class="inline-field"><input class="field-input" id="profileEmail" type="email" autocomplete="email" value="${esc(vantaSession.user.email || "")}"><button class="dialog-btn" onclick="updateAccountEmail()">Update email</button></div><label class="field">PASSWORD</label><div class="inline-field"><input class="field-input" id="profileNewPassword" type="password" autocomplete="new-password" minlength="8" placeholder="Enter a new password"><button class="dialog-btn" onclick="updateAccountPassword()">Change password</button></div><div id="accountUpdateStatus" class="form-error" aria-live="polite"></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button>` : vantaDb ? `<label class="field">USERNAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Choose a username for a new account"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="Your password"><div id="profileAuthError" class="form-error" aria-live="polite"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div>` : `<p>Connect the shared chat service before creating an account.</p><a class="dialog-btn" href="https://supabase.com/dashboard" target="_blank" rel="noopener">Open Supabase setup ↗</a>`}`;
+  } else if (section === "appearance") {
+    content.innerHTML = `<span class="eyebrow">APPEARANCE</span><h3>Choose a theme</h3><div class="theme-grid">${themes.map(([id, name, a, b, c]) => `<button class="theme-option ${document.documentElement.dataset.theme === id ? "selected" : ""}" onclick="setTheme('${id}')"><span class="swatches"><i style="background:${a}"></i><i style="background:${b}"></i><i style="background:${c}"></i></span><span>${name}<small>${document.documentElement.dataset.theme === id ? "CURRENT" : "APPLY THEME"}</small></span></button>`).join("")}</div>`;
+  } else if (section === "notifications") {
+    content.innerHTML = `<span class="eyebrow">NOTIFICATIONS</span><h3>Choose what gets your attention</h3>${settingRow("channelNotifications", "Room notifications", "Allow room activity alerts", true)}${settingRow("desktopNotifications", "Desktop notifications", "Show a system alert for new room messages")}${settingRow("mentionsOnly", "Mentions only", "Limit desktop alerts to messages that mention you")}${"<button class=\"dialog-btn\" onclick=\"enableDesktopNotifications()\">Enable browser alerts</button>"}`;
+  } else if (section === "privacy") {
+    content.innerHTML = `<span class="eyebrow">PRIVACY</span><h3>Presence and typing</h3>${settingRow("showOnline", "Show online status", "Appear in the member list while using the site", true)}${settingRow("shareTyping", "Share typing status", "Let members see when you are writing")}`;
+  } else {
+    content.innerHTML = `<span class="eyebrow">ACCESSIBILITY</span><h3>Make the interface easier to use</h3>${settingRow("reduceMotion", "Reduce motion", "Turn off decorative movement and transitions")}${settingRow("compactChat", "Compact messages", "Fit more messages on screen")}`;
+  }
+}
+
+async function enableDesktopNotifications() {
+  if (!("Notification" in window)) { toast("This browser does not support desktop notifications."); return; }
+  const permission = await Notification.requestPermission();
+  if (permission === "granted") { setSetting("desktopNotifications", true); toast("Desktop notifications enabled"); }
+  else toast("Notification permission was not granted");
 }
 
 async function updateAccountEmail() {
@@ -618,7 +715,9 @@ async function saveProfile() {
   document.querySelector("#miniStatus").textContent = profile.status;
   document.querySelector("#miniAvatar").firstElementChild.textContent = initials(profile.name);
   document.querySelector("#miniInitial").textContent = initials(profile.name);
-  accountUI(); closeDialog(); render(); toast("Profile saved");
+  accountUI(); render();
+  if (currentSettingsSection) renderSettingsSection("profile"); else closeDialog();
+  toast("Profile saved");
 }
 
 async function loadPeopleDirectory() {
@@ -773,7 +872,7 @@ function downloadChatHistory() {
 }
 
 function trackTyping() {
-  if (!presenceRealtime || !vantaSession) return;
+  if (!presenceRealtime || !vantaSession || !settingValue("shareTyping", true)) return;
   const track = typing => presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole, typing });
   track(true); clearTimeout(typingTimer); typingTimer = setTimeout(() => track(false), 1600);
 }
@@ -837,6 +936,9 @@ document.querySelector("#messageInput")?.addEventListener("blur", () => { clearT
 document.querySelector("#miniName").textContent = profile.name || "Create an account";
 document.querySelector("#miniStatus").textContent = profile.status || "Not signed in";
 document.querySelector("#miniInitial").textContent = initials(profile.name);
+document.documentElement.classList.toggle("reduce-motion", settingValue("reduceMotion"));
+document.documentElement.classList.toggle("compact-chat", settingValue("compactChat"));
+updateUnreadChannels();
 
 async function signOutNocturne() {
   const result = await vantaDb.auth.signOut();
