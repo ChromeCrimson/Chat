@@ -504,6 +504,7 @@ async function authenticateNocturne(mode) {
   if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); return; }
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
+    if (!vantaSession) return;
     closeDialog(); toast(mode === "signup" ? "YOUR DEPARTMENT PROFILE is ready" : "Welcome back");
   } else showDialog("Check your email", `<p>We sent a verification link to <b>${esc(email)}</b>. Verify it, then sign in from your profile.</p><button class="dialog-btn primary" onclick="closeDialog();openProfile()">Back to profile</button>`);
 }
