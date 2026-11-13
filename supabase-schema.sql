@@ -6,7 +6,7 @@ create table if not exists public.profiles (
   display_name text not null default 'New member',
   status text not null default 'Around',
   about text not null default '',
-  theme text not null default 'midnight',
+  theme text not null default 'paperwork',
   role text not null default 'member' check (role in ('member', 'moderator')),
   username_changed_at timestamptz,
   created_at timestamptz not null default now(),
@@ -37,12 +37,12 @@ create table if not exists public.message_reactions (
 
 create table if not exists public.workspace_settings (
   id text primary key check (id = 'main'),
-  name text not null default 'Nocturne House',
-  description text not null default 'Find your people after dark.',
+  name text not null default 'General Queue',
+  description text not null default 'Messages are handled in the order received.',
   updated_at timestamptz not null default now()
 );
 insert into public.workspace_settings (id, name, description)
-values ('main', 'Nocturne House', 'Find your people after dark.')
+values ('main', 'General Queue', 'Messages are handled in the order received.')
 on conflict (id) do nothing;
 
 create table if not exists public.direct_messages (
