@@ -9,6 +9,7 @@ let workspaceSettings = {
   name: localStorage.getItem("vanta-space-name") || "Nocturne House",
   description: localStorage.getItem("vanta-space-description") || "Find your people after dark."
 };
+if (workspaceSettings.name === "Afterhours Club") { workspaceSettings.name = "Nocturne House"; localStorage.setItem("vanta-space-name", workspaceSettings.name); }
 
 const backendConfig = window.VANTA_CONFIG || {};
 const publicSupabaseKey = backendConfig.supabasePublishableKey || backendConfig.supabaseAnonKey;
@@ -504,7 +505,7 @@ function openProfile() {
     ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Signed in</h3></div>${role}</div><p>Your profile, room history, and DMs follow your account across devices.</p><div class="id-card"><span>Nocturne ID</span><code>${esc(accountId)}</code><button class="dialog-btn" onclick="copyText('${esc(accountId)}','Account ID copied')">Copy ID</button></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div>`
     : vantaDb
       ? `<div class="profile-account"><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Take your profile with you</h3><p>Sign in to find other real members, share conversations, and sync between computers.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Your name in Nocturne"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters"><div id="profileAuthError" class="form-error"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
-      : `<div class="profile-account"><span class="eyebrow">LOCAL PREVIEW</span><h3>Connect your account</h3><p>Set up Supabase to use searchable member profiles and shared DMs on other computers.</p><button class="dialog-btn" onclick="openAccount()">Account setup</button></div>`;
+      : `<div class="profile-account"><span class="eyebrow">LOCAL PREVIEW</span><h3>Connect your account</h3><p>Set up Supabase to use searchable member profiles and shared DMs on other computers.</p><a class="dialog-btn" href="https://supabase.com/dashboard" target="_blank" rel="noopener">Open Supabase setup ↗</a></div>`;
   const cooldown = vantaProfile?.username_changed_at ? Date.parse(vantaProfile.username_changed_at) + 86400000 : 0;
   const locked = vantaSession && cooldown > Date.now();
   const lockNote = locked ? `<p class="cooldown-note">Username changes unlock in ${formatDuration(cooldown - Date.now())}.</p>` : "";
