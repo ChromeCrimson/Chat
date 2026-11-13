@@ -1,7 +1,11 @@
--- Run once after the original Supabase schema to enable the member directory, DMs, username timer, and moderator tools.
+-- Run after the original Supabase schema to enable member features. Re-run to apply the latest account and moderation rules.
 alter table public.profiles add column if not exists role text not null default 'member';
 alter table public.profiles add column if not exists username_changed_at timestamptz;
+alter table public.profiles add column if not exists account_disabled boolean not null default false;
+alter table public.profiles alter column display_name drop default;
+alter table public.profiles alter column status set default '';
 do $$ begin alter table public.profiles add constraint profiles_role_allowed check (role in ('member','moderator')); exception when duplicate_object then null; end $$;
+do $$ begin alter table public.profiles add constraint profiles_display_name_nonblank check (length(trim(display_name)) > 0) not valid; exception when duplicate_object then null; end $$;
 
 -- Members can read profiles, edit their own public fields, and cannot assign their own role.
 revoke insert, update, delete on public.profiles from authenticated;
@@ -38,9 +42,9 @@ grant select,insert,update,delete on public.direct_messages to authenticated;
 revoke update on public.direct_messages from authenticated;
 grant update (content,reply_to,updated_at) on public.direct_messages to authenticated;
 drop policy if exists "Participants read direct messages" on public.direct_messages;
-create policy "Participants read direct messages" on public.direct_messages for select to authenticated using(auth.uid()=sender_id or auth.uid()=recipient_id);
+create policy "Participants read direct messages" on public.direct_messages for select to authenticated using((auth.uid()=sender_id or auth.uid()=recipient_id) and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
 drop policy if exists "Members send direct messages to real members" on public.direct_messages;
-create policy "Members send direct messages to real members" on public.direct_messages for insert to authenticated with check(auth.uid()=sender_id and sender_id<>recipient_id and exists(select 1 from public.profiles where id=recipient_id) and not exists(select 1 from public.member_moderation where user_id=auth.uid() and muted_until>now()));
+create policy "Members send direct messages to real members" on public.direct_messages for insert to authenticated with check(auth.uid()=sender_id and sender_id<>recipient_id and exists(select 1 from public.profiles where id=recipient_id and not account_disabled) and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled) and not exists(select 1 from public.member_moderation where user_id=auth.uid() and muted_until>now()));
 drop policy if exists "Senders edit their direct messages" on public.direct_messages;
 create policy "Senders edit their direct messages" on public.direct_messages for update to authenticated using(auth.uid()=sender_id) with check(auth.uid()=sender_id);
 drop policy if exists "Participants delete direct messages" on public.direct_messages;
@@ -57,11 +61,22 @@ create policy "Members see own moderation state" on public.member_moderation for
 
 -- Shared room-message deletion can be done by the author or a moderator; timed-out accounts cannot post.
 drop policy if exists "Members delete their messages" on public.messages;
-create policy "Members delete their messages" on public.messages for delete to authenticated using(auth.uid()=user_id);
+create policy "Members delete their messages" on public.messages for delete to authenticated using(auth.uid()=user_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
 drop policy if exists "Moderators delete room messages" on public.messages;
 create policy "Moderators delete room messages" on public.messages for delete to authenticated using(exists(select 1 from public.profiles where id=auth.uid() and role='moderator'));
 drop policy if exists "Members send as themselves" on public.messages;
-create policy "Members send as themselves" on public.messages for insert to authenticated with check(auth.uid()=user_id and not exists(select 1 from public.member_moderation where user_id=auth.uid() and muted_until>now()));
+drop policy if exists "Members read room messages" on public.messages;
+create policy "Members read room messages" on public.messages for select to authenticated using(not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
+drop policy if exists "Members send as themselves" on public.messages;
+create policy "Members send as themselves" on public.messages for insert to authenticated with check(auth.uid()=user_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled) and not exists(select 1 from public.member_moderation where user_id=auth.uid() and muted_until>now()));
+drop policy if exists "Members edit their messages" on public.messages;
+create policy "Members edit their messages" on public.messages for update to authenticated using(auth.uid()=user_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled)) with check(auth.uid()=user_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
+drop policy if exists "Senders edit their direct messages" on public.direct_messages;
+create policy "Senders edit their direct messages" on public.direct_messages for update to authenticated using(auth.uid()=sender_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled)) with check(auth.uid()=sender_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
+drop policy if exists "Participants delete direct messages" on public.direct_messages;
+create policy "Participants delete direct messages" on public.direct_messages for delete to authenticated using((auth.uid()=sender_id or auth.uid()=recipient_id) and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
+drop policy if exists "Members react as themselves" on public.message_reactions;
+create policy "Members react as themselves" on public.message_reactions for insert to authenticated with check(auth.uid()=user_id and not exists(select 1 from public.profiles where id=auth.uid() and account_disabled));
 
 create or replace function public.enforce_username_cooldown()
 returns trigger language plpgsql set search_path=public as $$
@@ -80,12 +95,17 @@ create or replace function public.moderate_member(target_user uuid,moderation_ac
 returns void language plpgsql security definer set search_path=public as $$
 begin
  if not exists(select 1 from public.profiles where id=auth.uid() and role='moderator') then raise exception 'Moderator access required.'; end if;
- if target_user=auth.uid() and moderation_action in('demote','timeout') then raise exception 'You cannot demote or timeout your own account.'; end if;
+ if target_user=auth.uid() and moderation_action in('demote','timeout','disable') then raise exception 'You cannot demote, timeout, or disable your own account.'; end if;
  if not exists(select 1 from public.profiles where id=target_user) then raise exception 'Member not found.'; end if;
  if moderation_action='promote' then update public.profiles set role='moderator' where id=target_user;
  elsif moderation_action='demote' then
   if (select count(*) from public.profiles where role='moderator')<=1 then raise exception 'The last moderator cannot be demoted.'; end if;
   update public.profiles set role='member' where id=target_user;
+ elsif moderation_action='disable' then
+  if exists(select 1 from public.profiles where id=target_user and role='moderator') then raise exception 'Remove moderator access before disabling this account.'; end if;
+  update public.profiles set account_disabled=true where id=target_user;
+ elsif moderation_action='enable' then
+  update public.profiles set account_disabled=false where id=target_user;
  elsif moderation_action in('warn','timeout','clear_timeout') then
   insert into public.member_moderation(user_id,muted_until,warning_count,last_reason,updated_by)
   values(target_user,case when moderation_action='timeout' then now()+make_interval(mins=>greatest(coalesce(duration_minutes,10),1)) else null end,case when moderation_action='warn' then 1 else 0 end,coalesce(reason_text,''),auth.uid())
