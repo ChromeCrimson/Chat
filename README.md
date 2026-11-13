@@ -5,8 +5,8 @@ A deliberately ordinary-looking chat site with an unreasonably thorough filing s
 ## Features
 
 - Searchable member directory; private conversations can only start with an actual account
-- Profiles with account IDs, status, about text, and synced themes; full linked IDs are visible only to the owner and moderators
-- Account required for all room chat and DMs; new members choose their own display name
+- Profiles with a username, email and password management, status, bio, and synced themes; linked account IDs are visible to the owner and moderators
+- Account required for all room chat and DMs; new members choose their own username
 - Username changes are limited to once every 24 hours in the interface and database
 - Room chat with replies, mentions, reactions, file attachments, edits, deletes, saved messages, search, and live typing/presence
 - Private DMs with reply, edit, delete, and a recent-conversation list
