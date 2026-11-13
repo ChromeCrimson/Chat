@@ -1,33 +1,30 @@
-# Vanta — One community server
+# Nocturne
 
-A gradient-led community chat website for GitHub Pages. People can sign in from different computers and keep profiles and shared room messages synced with Supabase.
+Nocturne is a sleek, animated dark community chat built for GitHub Pages. Its single shared community has rooms and a real member directory; direct messages are private conversations between signed-in member accounts.
 
 ## Features
 
-- One shared server, with editable name and description
-- Member profiles and cross-device accounts
-- Shared room chat with live updates, reactions, replies, attachments, and presence
-- Direct messages, themes, search, and saved messages
-- Moderator badges, server editing, and moderator message removal
-- Custom right-click menus for messages, rooms, members, and server settings
-- No browser prompt or confirm dialogs; forms and confirmations stay inside the site
-- Mobile layout and eight dark themes
+- Searchable member directory; DMs can only start with an existing account
+- Account profiles with public Nocturne ID, status, about text, and synced themes
+- Username changes are limited to once every 24 hours in both the interface and database
+- Shared room chat with replies, @mentions, reactions, file attachments, edits, deletes, saved messages, search, and live presence
+- Private cross-device DMs with reply, edit, and delete actions
+- One editable community server, eight themes, custom right-click menus, keyboard focus states, motion effects, and mobile navigation
+- Moderator profile tools: warn, 10-minute timeout, clear timeout, promote/demote moderator, remove any room message, and edit server details
+- Custom Nocturne logo and atmospheric banner art in `assets/`
 
-## Publish the site
+## Publish and connect Supabase
 
-1. In the GitHub repository, choose **Settings → Pages** and publish from the `main` branch root.
-2. In Supabase, enable email and password sign-in.
-3. If setting up a fresh Supabase project, run [`supabase-schema.sql`](supabase-schema.sql) in its SQL Editor. If you already ran the earlier schema, run [`supabase-moderators-migration.sql`](supabase-moderators-migration.sql) instead.
-4. Confirm `config.js` contains your Supabase project URL and public publishable key. Never put a `service_role` or secret key in the website.
-5. In Supabase **Authentication → URL Configuration**, add your GitHub Pages address as the Site URL and an allowed redirect URL.
-6. Create your account on the published site. To make the first moderator, run the commented SQL statement at the end of `supabase-moderators-migration.sql`, replacing `YOUR_ACCOUNT_EMAIL` with the email used for your account.
+1. Publish the repository root from the `main` branch in **GitHub → Settings → Pages**.
+2. In Supabase, enable email/password authentication and configure the GitHub Pages URL under **Authentication → URL Configuration**.
+3. For a brand-new Supabase project, run [`supabase-schema.sql`](supabase-schema.sql) in the SQL Editor. If the project already uses the original schema or earlier moderator migration, run [`supabase-chat-upgrade.sql`](supabase-chat-upgrade.sql) instead.
+4. Ensure `config.js` contains the project URL and public publishable key. Do not put a secret or `service_role` key in browser code.
+5. Create your account through **Your profile** on the published site. To assign the first moderator, run the SQL statement commented at the end of `supabase-chat-upgrade.sql`, replacing `YOUR_ACCOUNT_EMAIL` with the account email.
 
-Moderators can edit the shared server name and description, and delete any room message. Other members can edit or remove their own messages. Moderator access is assigned through Supabase SQL so members cannot promote themselves.
+The upgrade adds member search and DM storage, server settings, username cooldown enforcement, moderator roles, warnings, and timed silencing. The first moderator is intentionally assigned through the Supabase SQL Editor; members cannot give themselves moderator access.
 
-## Right-click menu
+## Right-click and accessibility
 
-Right-click a message, room, member, or the server to see available actions. It uses the browser-standard `contextmenu` event, supported by current desktop browsers including Opera GX. Right-click remains native inside text fields so the normal copy/paste menu works. Keyboard users can open the same menu with the Context Menu key or Shift+F10 when an item has focus.
+Right-click messages, rooms, members, and the server for contextual actions. The site uses the standard `contextmenu` event supported by desktop browsers, including Opera GX; text fields preserve the browser's normal copy/paste menu. Animations honor `prefers-reduced-motion`.
 
-## Local preview limits
-
-If Supabase is not configured, the site works as a local preview. Direct-message previews and rooms created in preview mode are stored only in that browser. Voice chat needs a separate voice service.
+Voice rooms are visual hangout placeholders; voice calling requires a separate media service.
