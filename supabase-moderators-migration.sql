@@ -13,12 +13,12 @@ grant update (display_name, status, about, theme, updated_at) on public.profiles
 
 create table if not exists public.workspace_settings (
   id text primary key check (id = 'main'),
-  name text not null default 'Afterhours Club',
-  description text not null default 'A little space for big ideas.',
+  name text not null default 'General Queue',
+  description text not null default 'Messages are handled in the order received.',
   updated_at timestamptz not null default now()
 );
 insert into public.workspace_settings (id, name, description)
-values ('main', 'Afterhours Club', 'A little space for big ideas.')
+values ('main', 'General Queue', 'Messages are handled in the order received.')
 on conflict (id) do nothing;
 alter table public.workspace_settings enable row level security;
 grant select, update on public.workspace_settings to authenticated;
