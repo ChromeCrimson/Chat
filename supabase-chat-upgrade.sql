@@ -1,4 +1,4 @@
--- Run once after the original Supabase schema to enable the Nocturne directory, DMs, username timer, and moderator tools.
+-- Run once after the original Supabase schema to enable the member directory, DMs, username timer, and moderator tools.
 alter table public.profiles add column if not exists role text not null default 'member';
 alter table public.profiles add column if not exists username_changed_at timestamptz;
 do $$ begin alter table public.profiles add constraint profiles_role_allowed check (role in ('member','moderator')); exception when duplicate_object then null; end $$;
@@ -10,10 +10,10 @@ grant insert (id,display_name,status,about,theme,created_at,updated_at) on publi
 grant update (display_name,status,about,theme,updated_at) on public.profiles to authenticated;
 
 create table if not exists public.workspace_settings (
- id text primary key check (id='main'), name text not null default 'Nocturne House', description text not null default 'Find your people after dark.', updated_at timestamptz not null default now()
+ id text primary key check (id='main'), name text not null default 'General Queue', description text not null default 'Messages are handled in the order received.', updated_at timestamptz not null default now()
 );
-insert into public.workspace_settings(id,name,description) values('main','Nocturne House','Find your people after dark.') on conflict(id) do nothing;
-update public.workspace_settings set name='Nocturne House',description='Find your people after dark.' where id='main' and name='Afterhours Club';
+insert into public.workspace_settings(id,name,description) values('main','General Queue','Messages are handled in the order received.') on conflict(id) do nothing;
+update public.workspace_settings set name='General Queue',description='Messages are handled in the order received.' where id='main' and name in ('Afterhours Club','Nocturne House');
 alter table public.workspace_settings enable row level security;
 grant select,update on public.workspace_settings to authenticated;
 drop policy if exists "Members read server settings" on public.workspace_settings;
@@ -103,4 +103,6 @@ do $$ begin alter publication supabase_realtime add table public.direct_messages
 
 -- After creating your account, promote the first moderator using the SQL below.
 -- update public.profiles set role='moderator' where id=(select id from auth.users where email='YOUR_ACCOUNT_EMAIL');
+
+update public.profiles set theme='paperwork' where theme='midnight';
 
