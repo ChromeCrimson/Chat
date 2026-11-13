@@ -13,6 +13,7 @@ create table if not exists public.workspace_settings (
  id text primary key check (id='main'), name text not null default 'Nocturne House', description text not null default 'Find your people after dark.', updated_at timestamptz not null default now()
 );
 insert into public.workspace_settings(id,name,description) values('main','Nocturne House','Find your people after dark.') on conflict(id) do nothing;
+update public.workspace_settings set name='Nocturne House',description='Find your people after dark.' where id='main' and name='Afterhours Club';
 alter table public.workspace_settings enable row level security;
 grant select,update on public.workspace_settings to authenticated;
 drop policy if exists "Members read server settings" on public.workspace_settings;
