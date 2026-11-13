@@ -6,6 +6,8 @@ let roomRealtime = null;
 let presenceRealtime = null;
 let settingsRealtime = null;
 let typingTimer = null;
+let sessionApplyUserId = null;
+let sessionApplyPromise = null;
 let workspaceSettings = {
   name: localStorage.getItem("vanta-space-name") || "General Queue",
   description: localStorage.getItem("vanta-space-description") || "A waiting room, but for messages."
@@ -31,8 +33,8 @@ function accountUI() {
   const composer = document.querySelector("#messageInput");
   if (composer) { composer.disabled = !signedIn; composer.placeholder = signedIn ? `Leave a thought in #${current}…` : "Sign in to join the conversation"; }
   if (status) status.textContent = signedIn ? (vantaRole === "moderator" ? "Moderator · online" : "Account synced · online") : "Not signed in";
-  if (syncState) syncState.textContent = signedIn ? `Signed in as ${profile.name}` : "Not signed in";
-  if (syncDetail) syncDetail.textContent = signedIn ? "Your account is synced" : vantaDb ? "This device until you sign in" : "Local preview";
+  if (syncState) syncState.textContent = signedIn ? "Signed in" : "Not signed in";
+  if (syncDetail) syncDetail.textContent = signedIn ? (vantaSession.user.email || "Your account is synced") : vantaDb ? "This device until you sign in" : "Local preview";
   if (syncDot) syncDot.classList.toggle("connected", signedIn);
   if (syncAction) syncAction.textContent = signedIn ? "Profile" : "Sign in";
   if (modShortcut) modShortcut.hidden = !signedIn || vantaRole !== "moderator";
@@ -50,7 +52,7 @@ function openAccount() {
     showDialog("Your Department account", `<p>Signed in as <b>${esc(vantaSession.user.email)}</b>. Your profile and room messages sync to this account.</p><button class="dialog-btn" onclick="openProfile()">Edit your profile</button><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="signOutNocturne()">Sign out</button></div>`);
     return;
   }
-  showDialog("Join the conversation", `<p>Create one account and use it to keep your profile and room messages with you on any computer.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="authName" maxlength="28" autocomplete="nickname" placeholder="How people will know you"><label class="field">EMAIL</label><input class="field-input" id="authEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="authPassword" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters"><div id="authError" style="font-size:10px;color:var(--danger);margin-top:8px"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div><p style="margin-bottom:0">You may need to confirm your email before signing in.</p>`);
+  showDialog("Join the conversation", `<p>Create one account and use it to keep your profile and room messages with you on any computer.</p><label class="field">USERNAME</label><input class="field-input" id="authName" maxlength="28" autocomplete="nickname" placeholder="How people will know you"><label class="field">EMAIL</label><input class="field-input" id="authEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="authPassword" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters"><div id="authError" style="font-size:10px;color:var(--danger);margin-top:8px"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div><p style="margin-bottom:0">You may need to confirm your email before signing in.</p>`);
 }
 
 async function authenticateNocturne(mode) {
@@ -58,12 +60,15 @@ async function authenticateNocturne(mode) {
   const password = document.querySelector("#authPassword").value;
   const name = document.querySelector("#authName").value.trim();
   const error = document.querySelector("#authError");
-  if (!email || !password || (mode === "signup" && !name)) { error.textContent = mode === "signup" ? "Choose a display name, email, and password." : "Enter your email and password."; return; }
+  if (!email || !password || (mode === "signup" && !name)) { error.textContent = mode === "signup" ? "Choose a username, email, and password." : "Enter your email and password."; return; }
   if (mode === "signup" && password.length < 8) { error.textContent = "Use a password with at least 8 characters."; return; }
   error.textContent = "";
-  const result = mode === "signup"
-    ? await vantaDb.auth.signUp({ email, password, options: { data: { display_name: name } } })
-    : await vantaDb.auth.signInWithPassword({ email, password });
+  let result;
+  try {
+    result = mode === "signup"
+      ? await vantaDb.auth.signUp({ email, password, options: { data: { display_name: name } } })
+      : await vantaDb.auth.signInWithPassword({ email, password });
+  } catch (err) { if (error) error.textContent = err.message || "Could not sign in. Check your connection and try again."; return; }
   if (result.error) { error.textContent = result.error.message; return; }
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
@@ -95,7 +100,7 @@ async function applyNocturneSessionBase(session) {
   let row = result.data;
   if (!row) {
     const displayName = session.user.user_metadata?.display_name?.trim();
-    if (!displayName) { await vantaDb.auth.signOut(); vantaSession = null; toast("Choose a display name when creating your account."); accountUI(); return; }
+    if (!displayName) { await vantaDb.auth.signOut(); vantaSession = null; toast("Choose a username when creating your account."); accountUI(); return; }
     const candidate = { id: session.user.id, display_name: displayName, status: "", about: "", theme: "paperwork" };
     const created = await vantaDb.from("profiles").upsert(candidate).select().single();
     if (created.error) { toast("Profile setup failed: " + created.error.message); return; }
@@ -224,7 +229,7 @@ async function addReactionEmoji(index, emoji) {
 }
 
 function openProfile() {
-  showDialog("Your profile", `<p>${vantaSession ? "Your profile follows your account across computers." : "This preview profile is stored on this device. Sign in to sync it across computers."}</p><label class="field">DISPLAY NAME</label><input class="field-input" id="profileName" maxlength="28" value="${esc(profile.name)}"><label class="field">STATUS LINE</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}"><label class="field">A LITTLE ABOUT YOU</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="160">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Cancel</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div>`);
+  showDialog("Your profile", `<p>${vantaSession ? "Your profile follows your account across computers." : "This preview profile is stored on this device. Sign in to sync it across computers."}</p><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" value="${esc(profile.name)}"><label class="field">STATUS LINE</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}"><label class="field">A LITTLE ABOUT YOU</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="160">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Cancel</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div>`);
 }
 
 async function saveProfile() {
@@ -474,9 +479,23 @@ document.addEventListener("keydown", event => {
 
 accountUI();
 if (vantaDb) {
-  vantaDb.auth.onAuthStateChange((_event, session) => {
+  vantaDb.auth.onAuthStateChange((event, session) => {
     if (session) setTimeout(() => applyNocturneSession(session), 0);
-    else { vantaSession = null; vantaRole = "member"; if (roomRealtime) vantaDb.removeChannel(roomRealtime); if (presenceRealtime) vantaDb.removeChannel(presenceRealtime); if (settingsRealtime) vantaDb.removeChannel(settingsRealtime); roomRealtime = presenceRealtime = settingsRealtime = null; accountUI(); data = { ...seed }; render(); }
+    else {
+      if (event === "INITIAL_SESSION" && vantaSession) return;
+      vantaSession = null; vantaRole = "member"; profile = { name: "", status: "", about: "" };
+      if (roomRealtime) vantaDb.removeChannel(roomRealtime); if (presenceRealtime) vantaDb.removeChannel(presenceRealtime); if (settingsRealtime) vantaDb.removeChannel(settingsRealtime);
+      roomRealtime = presenceRealtime = settingsRealtime = null;
+      const name = document.querySelector("#miniName"), initial = document.querySelector("#miniInitial");
+      if (name) name.textContent = "Create an account"; if (initial) initial.textContent = "?";
+      accountUI(); data = { ...seed }; render();
+      if (document.querySelector("#dialog .dialog-head h2")?.textContent === "Your profile") setTimeout(openProfile, 0);
+    }
+  });
+  vantaDb.auth.getSession().then(({ data, error }) => {
+    if (error) { toast("Could not check sign-in status: " + error.message); return; }
+    if (data.session) applyNocturneSession(data.session);
+    else accountUI();
   });
 }
 
@@ -495,12 +514,15 @@ async function authenticateNocturne(mode) {
   const name = document.querySelector("#profileAuthName")?.value.trim() || "";
   const error = document.querySelector("#profileAuthError");
   if (!email || !password) { if (error) error.textContent = "Add your email and password to continue."; return; }
-  if (mode === "signup" && !name) { if (error) error.textContent = "Choose a display name to create your profile."; document.querySelector("#profileAuthName")?.focus(); return; }
+  if (mode === "signup" && !name) { if (error) error.textContent = "Choose a username to create your profile."; document.querySelector("#profileAuthName")?.focus(); return; }
   if (mode === "signup" && password.length < 8) { if (error) error.textContent = "Use at least 8 characters for your password."; return; }
   if (error) error.textContent = "";
-  const result = mode === "signup"
-    ? await vantaDb.auth.signUp({ email, password, options: { data: { display_name: name } } })
-    : await vantaDb.auth.signInWithPassword({ email, password });
+  let result;
+  try {
+    result = mode === "signup"
+      ? await vantaDb.auth.signUp({ email, password, options: { data: { display_name: name } } })
+      : await vantaDb.auth.signInWithPassword({ email, password });
+  } catch (err) { if (error) error.textContent = err.message || "Could not sign in. Check the details and try again."; return; }
   if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); return; }
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
@@ -509,19 +531,57 @@ async function authenticateNocturne(mode) {
   } else showDialog("Check your email", `<p>We sent a verification link to <b>${esc(email)}</b>. Verify it, then sign in from your profile.</p><button class="dialog-btn primary" onclick="closeDialog();openProfile()">Back to profile</button>`);
 }
 
-function openProfile() {
-  const accountId = vantaSession?.user?.id || "";
-  const role = vantaRole === "moderator" ? '<span class="role">MODERATOR</span>' : '<span class="role member-role">MEMBER</span>';
+async function openProfile() {
+  if (vantaDb) {
+    try {
+      const { data: authSnapshot, error } = await vantaDb.auth.getSession();
+      if (error) throw error;
+      if (authSnapshot.session) {
+        if (vantaSession?.user.id !== authSnapshot.session.user.id || !vantaProfile) await applyNocturneSession(authSnapshot.session);
+        else { vantaSession = authSnapshot.session; accountUI(); }
+      } else if (vantaSession) {
+        vantaSession = null; vantaRole = "member"; vantaProfile = null; peopleDirectory = []; profile = { name: "", status: "", about: "" };
+        document.querySelector("#miniName").textContent = "Create an account"; document.querySelector("#miniInitial").textContent = "?";
+        accountUI(); data = { ...seed }; render();
+      }
+    } catch (error) { toast("Could not check sign-in status: " + error.message); }
+  }
+  accountUI();
   const auth = vantaSession
-    ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Signed in</h3></div>${role}</div><p>Your profile, room history, and DMs follow your account across devices.</p><div class="id-card"><span>Department ID</span><code>${esc(accountId)}</code><button class="dialog-btn" onclick="copyText('${esc(accountId)}','Account ID copied')">Copy ID</button></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div>`
+    ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT</span><h3>Signed in</h3></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div><label class="field">EMAIL</label><div class="inline-field"><input class="field-input" id="profileEmail" type="email" autocomplete="email" value="${esc(vantaSession.user.email || "")}"><button class="dialog-btn" onclick="updateAccountEmail()">Update email</button></div><label class="field">PASSWORD</label><div class="inline-field"><input class="field-input" id="profileNewPassword" type="password" autocomplete="new-password" minlength="8" placeholder="Enter a new password"><button class="dialog-btn" onclick="updateAccountPassword()">Change password</button></div><div id="accountUpdateStatus" class="form-error" aria-live="polite"></div></div>`
     : vantaDb
-      ? `<div class="profile-account"><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Take your profile with you</h3><p>Sign in to find other real members, share conversations, and sync between computers.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Your display name"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters"><div id="profileAuthError" class="form-error"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
+      ? `<div class="profile-account"><span class="eyebrow">ACCOUNT</span><h3>Sign in or create an account</h3><label class="field">USERNAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Choose a username (new accounts)"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="Your password"><div id="profileAuthError" class="form-error" aria-live="polite"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
       : `<div class="profile-account"><span class="eyebrow">ACCOUNT SETUP</span><h3>Chat requires an account</h3><p>Connect the shared chat service to create an account and talk with other members.</p><a class="dialog-btn" href="https://supabase.com/dashboard" target="_blank" rel="noopener">Open Supabase setup ↗</a></div>`;
   if (!vantaSession) { showDialog("Your profile", auth); return; }
   const cooldown = vantaProfile?.username_changed_at ? Date.parse(vantaProfile.username_changed_at) + 86400000 : 0;
   const locked = vantaSession && cooldown > Date.now();
   const lockNote = locked ? `<p class="cooldown-note">Username changes unlock in ${formatDuration(cooldown - Date.now())}.</p>` : "";
-  showDialog("Your profile", `<div class="profile-hero"><div class="profile-avatar">${esc(initials(profile.name))}</div><div><span class="eyebrow">YOUR DEPARTMENT PROFILE</span><h3>${esc(profile.name)}</h3><p>${esc(profile.status)}</p></div></div>${auth}<div class="profile-section"><div class="profile-card-head"><div><span class="eyebrow">PUBLIC PROFILE</span><h3>How members see you</h3></div><button class="dialog-btn" onclick="openThemes()">Themes</button></div><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Your display name">${lockNote}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="What are you up to?"><label class="field">ABOUT YOU</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="220" placeholder="A little about yourself">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div></div>`);
+  showDialog("Your profile", `<div class="profile-section"><div class="profile-card-head"><span class="eyebrow">PROFILE SETTINGS</span><button class="dialog-btn" onclick="openThemes()">Themes</button></div><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Choose a username">${lockNote}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="Your status"><label class="field">BIO</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="220" placeholder="A short bio">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div></div>${auth}`);
+}
+
+async function updateAccountEmail() {
+  const field = document.querySelector("#profileEmail"), status = document.querySelector("#accountUpdateStatus");
+  const email = field?.value.trim();
+  if (!email) { if (status) status.textContent = "Enter an email address."; return; }
+  try {
+    const result = await vantaDb.auth.updateUser({ email });
+    if (result.error) { if (status) status.textContent = result.error.message; return; }
+    if (status) status.textContent = "Check your inbox to confirm the email change.";
+    toast("Email confirmation sent");
+  } catch (error) { if (status) status.textContent = error.message || "Email could not be updated."; }
+}
+
+async function updateAccountPassword() {
+  const field = document.querySelector("#profileNewPassword"), status = document.querySelector("#accountUpdateStatus");
+  const password = field?.value || "";
+  if (password.length < 8) { if (status) status.textContent = "Use at least 8 characters for a new password."; return; }
+  try {
+    const result = await vantaDb.auth.updateUser({ password });
+    if (result.error) { if (status) status.textContent = result.error.message; return; }
+    field.value = "";
+    if (status) status.textContent = "Password updated.";
+    toast("Password updated");
+  } catch (error) { if (status) status.textContent = error.message || "Password could not be updated."; }
 }
 
 function formatDuration(milliseconds) {
@@ -535,7 +595,7 @@ async function saveProfile() {
   const nextName = nameInput?.value.trim() || "";
   const nextStatus = document.querySelector("#profileStatus")?.value.trim() || "";
   const nextAbout = document.querySelector("#profileAbout")?.value.trim() || "";
-  if (!nextName) { toast("Choose a display name first."); nameInput?.focus(); return; }
+  if (!nextName) { toast("Choose a username first."); nameInput?.focus(); return; }
   if (vantaSession && nextName !== profile.name && vantaProfile?.username_changed_at) {
     const unlockAt = Date.parse(vantaProfile.username_changed_at) + 86400000;
     if (unlockAt > Date.now()) { toast(`You can change your username in ${formatDuration(unlockAt - Date.now())}.`); return; }
@@ -750,16 +810,22 @@ function render() { baseRenderNocturne(); document.querySelectorAll('#messages .
 
 const baseApplySessionNocturne = applyNocturneSessionBase;
 async function applyNocturneSession(session) {
-  await baseApplySessionNocturne(session);
-  if (!vantaSession) return;
-  const result = await vantaDb.from("profiles").select("id,display_name,status,about,role,theme,username_changed_at,account_disabled").eq("id", session.user.id).maybeSingle();
-  if (!result.error) {
+  if (!session || !vantaDb) return;
+  if (sessionApplyUserId === session.user.id && sessionApplyPromise) return sessionApplyPromise;
+  sessionApplyUserId = session.user.id;
+  sessionApplyPromise = (async () => {
+    await baseApplySessionNocturne(session);
+    if (!vantaSession || vantaSession.user.id !== session.user.id) return;
+    const result = await vantaDb.from("profiles").select("id,display_name,status,about,role,theme,username_changed_at,account_disabled").eq("id", session.user.id).maybeSingle();
+    if (result.error) { toast("Signed in, but profile sync failed: " + result.error.message); accountUI(); return; }
     vantaProfile = result.data;
     if (result.data?.account_disabled) { await vantaDb.auth.signOut(); vantaSession = null; vantaRole = "member"; accountUI(); showDialog("Account unavailable", "A moderator has disabled this account on this site. Contact a moderator if you think this was a mistake."); return; }
     profile.id = session.user.id;
-    document.querySelector("#miniStatus").textContent = `${profile.status || "Around"} · ${vantaRole === "moderator" ? "Moderator" : "online"}`;
-  }
-  await loadPeopleDirectory();
+    await loadPeopleDirectory();
+    accountUI();
+  })();
+  try { await sessionApplyPromise; }
+  finally { if (sessionApplyUserId === session.user.id) { sessionApplyUserId = null; sessionApplyPromise = null; } }
 }
 
 formatMessageDate();
