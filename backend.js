@@ -5,11 +5,12 @@ let vantaRole = "member";
 let roomRealtime = null;
 let presenceRealtime = null;
 let settingsRealtime = null;
+let typingTimer = null;
 let workspaceSettings = {
-  name: localStorage.getItem("vanta-space-name") || "Nocturne House",
-  description: localStorage.getItem("vanta-space-description") || "Find your people after dark."
+  name: localStorage.getItem("vanta-space-name") || "General Queue",
+  description: localStorage.getItem("vanta-space-description") || "A waiting room, but for messages."
 };
-if (workspaceSettings.name === "Afterhours Club") { workspaceSettings.name = "Nocturne House"; localStorage.setItem("vanta-space-name", workspaceSettings.name); }
+if (["General Queue", "General Queue"].includes(workspaceSettings.name)) { workspaceSettings.name = "General Queue"; localStorage.setItem("vanta-space-name", workspaceSettings.name); }
 
 const backendConfig = window.VANTA_CONFIG || {};
 const publicSupabaseKey = backendConfig.supabasePublishableKey || backendConfig.supabaseAnonKey;
@@ -26,11 +27,18 @@ function accountUI() {
   const accountButton = document.querySelector("#accountBtn");
   const status = document.querySelector("#miniStatus");
   const liveCount = document.querySelector("#liveCount");
+  const syncState = document.querySelector("#syncState"), syncDetail = document.querySelector("#syncDetail"), syncDot = document.querySelector("#syncDot"), syncAction = document.querySelector("#syncAction");
+  const modShortcut = document.querySelector("#modShortcut");
   if (accountButton) {
     accountButton.textContent = signedIn ? "●" : "↗";
     accountButton.title = signedIn ? `Signed in as ${vantaSession.user.email}` : "Create an account to sync across computers";
   }
   if (status) status.textContent = signedIn ? (vantaRole === "moderator" ? "Moderator · online" : "Synced account · online") : vantaDb ? "Sign in to sync across computers" : "Local preview · setup needed";
+  if (syncState) syncState.textContent = signedIn ? `Signed in as ${profile.name}` : "Not signed in";
+  if (syncDetail) syncDetail.textContent = signedIn ? "Your account is synced" : vantaDb ? "This device until you sign in" : "Local preview";
+  if (syncDot) syncDot.classList.toggle("connected", signedIn);
+  if (syncAction) syncAction.textContent = signedIn ? "Profile" : "Sign in";
+  if (modShortcut) modShortcut.hidden = !signedIn || vantaRole !== "moderator";
   if (liveCount && !signedIn) liveCount.textContent = vantaDb ? "Sign in to see members" : "Demo members";
   const memberList = document.querySelector("#memberList");
   if (memberList && vantaDb && !signedIn) memberList.innerHTML = '<div style="font-size:10px;color:var(--muted);padding:8px 4px">Sign in to see who is around.</div>';
@@ -38,11 +46,11 @@ function accountUI() {
 
 function openAccount() {
   if (!vantaDb) {
-    showDialog("Set up cross-device accounts", `<p>Nocturne is currently a local preview. To let people create profiles and share room messages across computers, connect a free Supabase project.</p><ol><li>Create a Supabase project.</li><li>Run <b>supabase-schema.sql</b> in its SQL Editor.</li><li>Copy <b>config.example.js</b> to <b>config.js</b> and add the project URL and publishable key.</li><li>Publish the site again, then create an account here.</li></ol><p>Never put a service-role key in a website.</p><a href="https://supabase.com/dashboard" target="_blank" rel="noopener" class="dialog-btn primary">Open Supabase ↗</a>`);
+    showDialog("Set up cross-device accounts", `<p>The General Chat Department is currently a local preview. To let people create profiles and share room messages across computers, connect a free Supabase project.</p><ol><li>Create a Supabase project.</li><li>Run <b>supabase-schema.sql</b> in its SQL Editor.</li><li>Copy <b>config.example.js</b> to <b>config.js</b> and add the project URL and publishable key.</li><li>Publish the site again, then create an account here.</li></ol><p>Never put a service-role key in a website.</p><a href="https://supabase.com/dashboard" target="_blank" rel="noopener" class="dialog-btn primary">Open Supabase ↗</a>`);
     return;
   }
   if (vantaSession) {
-    showDialog("Your Nocturne account", `<p>Signed in as <b>${esc(vantaSession.user.email)}</b>. Your profile and room messages sync to this account.</p><button class="dialog-btn" onclick="openProfile()">Edit your profile</button><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="signOutNocturne()">Sign out</button></div>`);
+    showDialog("Your Department account", `<p>Signed in as <b>${esc(vantaSession.user.email)}</b>. Your profile and room messages sync to this account.</p><button class="dialog-btn" onclick="openProfile()">Edit your profile</button><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="signOutNocturne()">Sign out</button></div>`);
     return;
   }
   showDialog("Join the conversation", `<p>Create one account and use it to keep your profile and room messages with you on any computer.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="authName" maxlength="28" autocomplete="nickname" placeholder="How people will know you"><label class="field">EMAIL</label><input class="field-input" id="authEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="authPassword" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters"><div id="authError" style="font-size:10px;color:var(--danger);margin-top:8px"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div><p style="margin-bottom:0">You may need to confirm your email before signing in.</p>`);
@@ -63,7 +71,7 @@ async function authenticateNocturne(mode) {
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
     closeDialog();
-    toast(mode === "signup" ? "Your Nocturne account is ready" : "Welcome back");
+    toast(mode === "signup" ? "Your Department account is ready" : "Welcome back");
   } else {
     showDialog("Check your email", `<p>Supabase sent a verification link to <b>${esc(email)}</b>. Confirm your address, then come back here to sign in.</p><button class="dialog-btn primary" onclick="closeDialog()">Okay</button>`);
   }
@@ -89,7 +97,7 @@ async function applyNocturneSessionBase(session) {
   if (result.error) { toast("Could not load profile: " + result.error.message); return; }
   let row = result.data;
   if (!row) {
-    const candidate = { id: session.user.id, display_name: session.user.user_metadata?.display_name || "New member", status: "Around", about: "", theme: "midnight" };
+    const candidate = { id: session.user.id, display_name: session.user.user_metadata?.display_name || "New member", status: "Around", about: "", theme: "paperwork" };
     const created = await vantaDb.from("profiles").upsert(candidate).select().single();
     if (created.error) { toast("Profile setup failed: " + created.error.message); return; }
     row = created.data;
@@ -158,6 +166,9 @@ function renderNocturneMembers() {
     const name = member.name || "Member";
     return `<button class="member-row" data-name="${esc(name)}" onclick="openMemberProfile('${esc(member.id || "")}')"><div class="avatar" style="background:${esc(colorFor(name))}">${esc(initials(name))}</div><span><strong>${esc(name)}</strong><small>in #${esc(channelLabel(member.channel || "lobby"))}</small></span>${member.role === "moderator" ? '<span class="role">MOD</span>' : ''}<span class="member-badge">●</span></button>`;
   }).join("") || '<div style="font-size:10px;color:var(--muted);padding:8px 4px">No one is online right now.</div>';
+  const typing = members.filter(member => member.id !== vantaSession?.user.id && member.channel === current && member.typing);
+  const indicator = document.querySelector("#typingIndicator");
+  if (indicator) indicator.textContent = typing.length ? `${typing.slice(0,2).map(member=>member.name).join(" and ")}${typing.length > 2 ? " and others" : ""} typing a message…` : "";
 }
 
 function selectChannel(element) {
@@ -286,7 +297,7 @@ async function openWorkspace() {
   const editor = canEdit
     ? `<label class="field">SERVER NAME</label><input class="field-input" id="workspaceNameInput" maxlength="40" value="${esc(workspaceSettings.name)}"><label class="field">ABOUT THIS SERVER</label><textarea class="field-input" id="workspaceDescriptionInput" maxlength="120" rows="3">${esc(workspaceSettings.description)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="copyInvite()">Copy invite link</button><button class="dialog-btn primary" onclick="saveWorkspaceSettings()">Save server</button></div>`
     : `<p>${esc(workspaceSettings.description)}</p><p>${vantaSession ? "Only a moderator can edit this server." : "Sign in to join the conversation."}</p><div class="dialog-actions"><button class="dialog-btn" onclick="copyInvite()">Copy invite link</button>${vantaSession ? "" : '<button class="dialog-btn primary" onclick="closeDialog();openAccount()">Sign in</button>'}</div>`;
-  showDialog(workspaceSettings.name, `<p>One community space for rooms, conversations, and direct messages.</p>${editor}`);
+  showDialog(workspaceSettings.name, `<p>One shared server. Unlimited filing opportunities.</p>${editor}`);
 }
 
 async function saveWorkspaceSettings() {
@@ -443,7 +454,7 @@ document.addEventListener("contextmenu", event => {
     if (!vantaDb || vantaRole === "moderator") items.unshift({ label: "Edit server settings", action: openWorkspace });
     showContextMenu(event, workspaceSettings.name, items); return;
   }
-  showContextMenu(event, "NOCTURNE", [{ label: "Edit server settings", action: openWorkspace }, { label: "Change theme", action: openThemes }, { label: "Edit your profile", action: openProfile }, { label: "Start a direct message", action: newDM }]);
+  showContextMenu(event, "DEPARTMENT", [{ label: "Edit server settings", action: openWorkspace }, { label: "Change theme", action: openThemes }, { label: "Edit your profile", action: openProfile }, { label: "Start a direct message", action: newDM }]);
 });
 
 async function copyText(value, successMessage) {
@@ -494,7 +505,7 @@ async function authenticateNocturne(mode) {
   if (result.error) { if (error) error.textContent = result.error.message; else toast(result.error.message); return; }
   if (result.data.session) {
     await applyNocturneSession(result.data.session);
-    closeDialog(); toast(mode === "signup" ? "Your Nocturne profile is ready" : "Welcome back");
+    closeDialog(); toast(mode === "signup" ? "YOUR DEPARTMENT PROFILE is ready" : "Welcome back");
   } else showDialog("Check your email", `<p>We sent a verification link to <b>${esc(email)}</b>. Verify it, then sign in from your profile.</p><button class="dialog-btn primary" onclick="closeDialog();openProfile()">Back to profile</button>`);
 }
 
@@ -502,14 +513,14 @@ function openProfile() {
   const accountId = vantaSession?.user?.id || "Preview profile · this device only";
   const role = vantaRole === "moderator" ? '<span class="role">MODERATOR</span>' : '<span class="role member-role">MEMBER</span>';
   const auth = vantaSession
-    ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Signed in</h3></div>${role}</div><p>Your profile, room history, and DMs follow your account across devices.</p><div class="id-card"><span>Nocturne ID</span><code>${esc(accountId)}</code><button class="dialog-btn" onclick="copyText('${esc(accountId)}','Account ID copied')">Copy ID</button></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div>`
+    ? `<div class="profile-account"><div class="profile-card-head"><div><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Signed in</h3></div>${role}</div><p>Your profile, room history, and DMs follow your account across devices.</p><div class="id-card"><span>Department ID</span><code>${esc(accountId)}</code><button class="dialog-btn" onclick="copyText('${esc(accountId)}','Account ID copied')">Copy ID</button></div><button class="dialog-btn" onclick="signOutNocturne()">Sign out</button></div>`
     : vantaDb
-      ? `<div class="profile-account"><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Take your profile with you</h3><p>Sign in to find other real members, share conversations, and sync between computers.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Your name in Nocturne"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters"><div id="profileAuthError" class="form-error"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
+      ? `<div class="profile-account"><span class="eyebrow">ACCOUNT & SECURITY</span><h3>Take your profile with you</h3><p>Sign in to find other real members, share conversations, and sync between computers.</p><label class="field">DISPLAY NAME</label><input class="field-input" id="profileAuthName" maxlength="28" autocomplete="nickname" placeholder="Your display name"><label class="field">EMAIL</label><input class="field-input" id="profileAuthEmail" type="email" autocomplete="email" placeholder="you@example.com"><label class="field">PASSWORD</label><input class="field-input" id="profileAuthPassword" type="password" autocomplete="current-password" minlength="8" placeholder="At least 8 characters"><div id="profileAuthError" class="form-error"></div><div class="dialog-actions"><button class="dialog-btn" onclick="authenticateNocturne('login')">Sign in</button><button class="dialog-btn primary" onclick="authenticateNocturne('signup')">Create account</button></div></div>`
       : `<div class="profile-account"><span class="eyebrow">LOCAL PREVIEW</span><h3>Connect your account</h3><p>Set up Supabase to use searchable member profiles and shared DMs on other computers.</p><a class="dialog-btn" href="https://supabase.com/dashboard" target="_blank" rel="noopener">Open Supabase setup ↗</a></div>`;
   const cooldown = vantaProfile?.username_changed_at ? Date.parse(vantaProfile.username_changed_at) + 86400000 : 0;
   const locked = vantaSession && cooldown > Date.now();
   const lockNote = locked ? `<p class="cooldown-note">Username changes unlock in ${formatDuration(cooldown - Date.now())}.</p>` : "";
-  showDialog("Your profile", `<div class="profile-hero"><div class="profile-avatar">${esc(initials(profile.name))}</div><div><span class="eyebrow">YOUR NOCTURNE PROFILE</span><h3>${esc(profile.name)}</h3><p>${esc(profile.status || "Around")}</p></div></div>${auth}<div class="profile-section"><div class="profile-card-head"><div><span class="eyebrow">PUBLIC PROFILE</span><h3>How members see you</h3></div><button class="dialog-btn" onclick="openThemes()">Themes</button></div><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Your display name">${lockNote}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="What are you up to?"><label class="field">ABOUT YOU</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="220" placeholder="A little about yourself">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div></div>`);
+  showDialog("Your profile", `<div class="profile-hero"><div class="profile-avatar">${esc(initials(profile.name))}</div><div><span class="eyebrow">YOUR DEPARTMENT PROFILE</span><h3>${esc(profile.name)}</h3><p>${esc(profile.status || "Around")}</p></div></div>${auth}<div class="profile-section"><div class="profile-card-head"><div><span class="eyebrow">PUBLIC PROFILE</span><h3>How members see you</h3></div><button class="dialog-btn" onclick="openThemes()">Themes</button></div><label class="field">USERNAME</label><input class="field-input" id="profileName" maxlength="28" ${locked ? "disabled" : ""} value="${esc(profile.name)}" placeholder="Your display name">${lockNote}<label class="field">STATUS</label><input class="field-input" id="profileStatus" maxlength="48" value="${esc(profile.status)}" placeholder="What are you up to?"><label class="field">ABOUT YOU</label><textarea class="field-input" id="profileAbout" rows="3" maxlength="220" placeholder="A little about yourself">${esc(profile.about)}</textarea><div class="dialog-actions"><button class="dialog-btn" onclick="closeDialog()">Close</button><button class="dialog-btn primary" onclick="saveProfile()">Save profile</button></div></div>`);
 }
 
 function formatDuration(milliseconds) {
@@ -543,7 +554,7 @@ async function saveProfile() {
   document.querySelector("#miniStatus").textContent = profile.status;
   document.querySelector("#miniAvatar").firstElementChild.textContent = initials(profile.name);
   document.querySelector("#railInitial").textContent = initials(profile.name);
-  closeDialog(); render(); toast("Profile saved");
+  accountUI(); closeDialog(); render(); toast("Profile saved");
 }
 
 async function loadPeopleDirectory() {
@@ -552,6 +563,7 @@ async function loadPeopleDirectory() {
   if (result.error) { toast("Could not load member directory: " + result.error.message); return; }
   peopleDirectory = (result.data || []).filter(person => person.id !== vantaSession.user.id);
   renderPeopleList();
+  await loadRecentDMs();
 }
 
 function renderPeopleList(query = "") {
@@ -560,12 +572,28 @@ function renderPeopleList(query = "") {
   const list = document.querySelector("#peopleResults");
   if (list) list.innerHTML = matches.length ? matches.map(person => `<button class="person-result" onclick="openDM('${esc(person.id)}')"><span class="avatar">${esc(initials(person.display_name))}</span><span class="person-copy"><strong>${esc(person.display_name)}</strong><small>${esc(person.status || "Around")}${person.role === "moderator" ? " · Moderator" : ""}</small></span><span class="person-action">Message ↗</span></button>`).join("") : `<div class="empty-directory">${peopleDirectory.length ? "No members match that search." : "No other member accounts exist yet."}</div>`;
   const sidebar = document.querySelector("#dmList");
-  if (sidebar && vantaSession) sidebar.innerHTML = matches.slice(0, 5).map(person => `<button class="dm-item" data-id="${esc(person.id)}" data-name="${esc(person.display_name)}" onclick="openDM('${esc(person.id)}')"><span class="avatar">${esc(initials(person.display_name))}</span><span class="nav-label">${esc(person.display_name)}</span></button>`).join("") || '<div class="dm-empty">No other members yet.</div>';
+  if (sidebar && vantaSession && !sidebar.dataset.recent) sidebar.innerHTML = matches.slice(0, 5).map(person => `<button class="dm-item" data-id="${esc(person.id)}" data-name="${esc(person.display_name)}" onclick="openDM('${esc(person.id)}')"><span class="avatar">${esc(initials(person.display_name))}</span><span class="nav-label">${esc(person.display_name)}</span></button>`).join("") || '<div class="dm-empty">No other members yet.</div>';
+}
+
+async function loadRecentDMs() {
+  if (!vantaDb || !vantaSession) return;
+  const id = vantaSession.user.id;
+  const result = await vantaDb.from("direct_messages").select("sender_id,recipient_id,content,created_at").or(`sender_id.eq.${id},recipient_id.eq.${id}`).order("created_at", { ascending: false }).limit(100);
+  if (result.error) return;
+  const recent = [], seen = new Set();
+  for (const message of result.data || []) {
+    const otherId = message.sender_id === id ? message.recipient_id : message.sender_id;
+    if (!seen.has(otherId)) { const person = peopleDirectory.find(item => item.id === otherId); if (person) recent.push({ ...person, preview: message.content }); seen.add(otherId); }
+  }
+  const sidebar = document.querySelector("#dmList");
+  if (!sidebar) return;
+  sidebar.dataset.recent = "true";
+  sidebar.innerHTML = recent.length ? recent.slice(0,6).map(person => `<button class="dm-item" data-id="${esc(person.id)}" data-name="${esc(person.display_name)}" onclick="openDM('${esc(person.id)}')"><span class="avatar">${esc(initials(person.display_name))}</span><span class="dm-person-copy"><strong>${esc(person.display_name)}</strong><small>${esc(person.preview.slice(0,35))}</small></span></button>`).join("") : '<div class="dm-empty">No conversations yet. A rare moment of inbox zero.</div>';
 }
 
 async function newDM() {
   if (!vantaSession) { openProfile(); toast("Sign in to find real member accounts."); return; }
-  showDialog("Find a member", `<p>Choose an existing Nocturne account to start a private conversation.</p><label class="directory-search"><span>⌕</span><input id="peopleSearch" placeholder="Search names or status" autocomplete="off" oninput="renderPeopleList(this.value)"></label><div id="peopleResults" class="people-results"><div class="empty-directory">Loading members…</div></div>`);
+  showDialog("Find a member", `<p>Choose an existing account to start a private conversation. Invented recipients are not on the form.</p><label class="directory-search"><span>⌕</span><input id="peopleSearch" placeholder="Search names or status" autocomplete="off" oninput="renderPeopleList(this.value)"></label><div id="peopleResults" class="people-results"><div class="empty-directory">Loading members…</div></div>`);
   await loadPeopleDirectory();
   document.querySelector("#peopleSearch")?.focus();
   renderPeopleList();
@@ -608,7 +636,7 @@ async function sendDMMessage() {
   if (state.data?.muted_until && Date.parse(state.data.muted_until) > Date.now()) { toast(`Messaging is paused until ${new Date(state.data.muted_until).toLocaleTimeString()}. ${state.data.last_reason || ""}`); return; }
   const result = await vantaDb.from("direct_messages").insert({ sender_id: vantaSession.user.id, recipient_id: currentDM.id, content: text, reply_to: currentDMReply });
   if (result.error) { toast("Message did not send: " + result.error.message); return; }
-  input.value = ""; currentDMReply = null; document.querySelector("#dmReplyBanner")?.remove(); await loadDMHistory(); input.focus();
+  input.value = ""; currentDMReply = null; document.querySelector("#dmReplyBanner")?.remove(); await loadDMHistory(); await loadRecentDMs(); input.focus();
 }
 
 function replyDM(messageId) {
@@ -644,7 +672,7 @@ async function openMemberProfile(userId) {
   if (!person) return;
   const id = person.id;
   const moderation = vantaRole === "moderator" && id !== vantaSession?.user.id ? `<div class="moderator-tools"><span class="eyebrow">MODERATOR TOOLS</span><input class="field-input" id="moderationReason" maxlength="180" placeholder="Reason for warning or timeout"><div class="moderator-actions"><button class="dialog-btn" onclick="runModeration('${esc(id)}','warn')">Warn</button><button class="dialog-btn" onclick="runModeration('${esc(id)}','timeout')">Timeout 10m</button><button class="dialog-btn" onclick="runModeration('${esc(id)}','clear_timeout')">Clear timeout</button><button class="dialog-btn" onclick="runModeration('${esc(id)}','${person.role === "moderator" ? "demote" : "promote"}')">${person.role === "moderator" ? "Remove moderator" : "Make moderator"}</button></div></div>` : "";
-  showDialog(esc(person.display_name), `<div class="member-profile"><div class="profile-avatar">${esc(initials(person.display_name))}</div><div><h3>${esc(person.display_name)} ${person.role === "moderator" ? '<span class="role">MODERATOR</span>' : ""}</h3><p>${esc(person.status || "Around")}</p></div></div><p>${esc(person.about || "A member of Nocturne.")}</p><div class="id-card"><span>Member ID</span><code>${esc(id)}</code></div><button class="dialog-btn primary" onclick="openDM('${esc(id)}')">Start a DM ↗</button>${moderation}`);
+  showDialog(esc(person.display_name), `<div class="member-profile"><div class="profile-avatar">${esc(initials(person.display_name))}</div><div><h3>${esc(person.display_name)} ${person.role === "moderator" ? '<span class="role">MODERATOR</span>' : ""}</h3><p>${esc(person.status || "Around")}</p></div></div><p>${esc(person.about || "A member of the Department.")}</p><div class="id-card"><span>Member ID</span><code>${esc(id)}</code></div><button class="dialog-btn primary" onclick="openDM('${esc(id)}')">Start a DM ↗</button>${moderation}`);
 }
 
 async function runModeration(userId, action) {
@@ -654,6 +682,33 @@ async function runModeration(userId, action) {
   if (result.error) { toast("Action did not apply: " + result.error.message); return; }
   await loadPeopleDirectory(); toast(action === "warn" ? "Warning recorded" : action === "timeout" ? "Member timed out for 10 minutes" : action === "promote" ? "Moderator role added" : action === "demote" ? "Moderator role removed" : "Timeout cleared");
   const person = peopleDirectory.find(item => item.id === userId); if (person) openMemberProfile(userId); else closeDialog();
+}
+
+async function openModeratorDashboard() {
+  if (vantaRole !== "moderator") { toast("Moderator access required."); return; }
+  await loadPeopleDirectory();
+  showDialog("Moderator desk", `<div class="profile-account"><span class="eyebrow">COMMUNITY OPERATIONS</span><h3>Everything in its proper folder.</h3><p>Manage member roles, warnings, and short timeouts from a profile card. The server is still one server; paperwork remains finite.</p><div class="dialog-actions"><button class="dialog-btn" onclick="openWorkspace()">Edit server details</button><button class="dialog-btn" onclick="newDM()">Find a member</button></div></div><label class="directory-search"><span>⌕</span><input id="modSearch" placeholder="Find a member to manage" oninput="renderModeratorList(this.value)"></label><div id="moderatorMembers" class="people-results"></div>`);
+  renderModeratorList();
+}
+
+function renderModeratorList(query = "") {
+  const box = document.querySelector("#moderatorMembers"); if (!box) return;
+  const q = query.toLowerCase().trim(), people = peopleDirectory.filter(person => !q || `${person.display_name} ${person.status || ""}`.toLowerCase().includes(q));
+  box.innerHTML = people.map(person => `<button class="person-result" onclick="openMemberProfile('${esc(person.id)}')"><span class="avatar">${esc(initials(person.display_name))}</span><span class="person-copy"><strong>${esc(person.display_name)}</strong><small>${person.role === "moderator" ? "Moderator" : "Member"} · ${esc(person.status || "Around")}</small></span><span class="person-action">Manage ↗</span></button>`).join("") || '<div class="empty-directory">No matching members.</div>';
+}
+
+function downloadChatHistory() {
+  const messages = data[current] || [];
+  if (!messages.length) { toast("There is nothing to export yet."); return; }
+  const lines = [`# ${workspaceSettings.name} — #${channelLabel(current)}`, `Exported ${new Date().toLocaleString()}`, "", ...messages.map(message => `[${message.time}] ${message.user}: ${message.text}${message.files?.length ? " [attachments: " + message.files.map(file => file.name).join(", ") + "]" : ""}`)];
+  const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" }), url = URL.createObjectURL(blob), link = document.createElement("a");
+  link.href = url; link.download = `chat-${current}-${new Date().toISOString().slice(0,10)}.txt`; document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); toast("Room transcript downloaded");
+}
+
+function trackTyping() {
+  if (!presenceRealtime || !vantaSession) return;
+  const track = typing => presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole, typing });
+  track(true); clearTimeout(typingTimer); typingTimer = setTimeout(() => track(false), 1600);
 }
 
 function openMentionPicker() {
@@ -702,6 +757,8 @@ async function applyNocturneSession(session) {
 }
 
 formatMessageDate();
+document.querySelector("#messageInput")?.addEventListener("input", trackTyping);
+document.querySelector("#messageInput")?.addEventListener("blur", () => { clearTimeout(typingTimer); if (presenceRealtime && vantaSession) presenceRealtime.track({ id: vantaSession.user.id, name: profile.name, channel: current, role: vantaRole, typing: false }); });
 document.querySelector("#miniName").textContent = profile.name;
 document.querySelector("#miniStatus").textContent = profile.status;
 document.querySelector("#miniInitial").textContent = initials(profile.name);
@@ -711,7 +768,7 @@ async function signOutNocturne() {
   const result = await vantaDb.auth.signOut();
   if (result.error) { toast(result.error.message); return; }
   for (const channel of [roomRealtime, presenceRealtime, settingsRealtime, dmRealtime]) if (channel) await vantaDb.removeChannel(channel);
-  vantaSession = null; vantaRole = "member"; vantaProfile = null; peopleDirectory = []; currentDM = null; currentDMReply = null;
+  clearTimeout(typingTimer); vantaSession = null; vantaRole = "member"; vantaProfile = null; peopleDirectory = []; currentDM = null; currentDMReply = null; document.querySelector("#dmList").dataset.recent = "";
   roomRealtime = presenceRealtime = settingsRealtime = dmRealtime = null;
   profile = { name: localStorage.getItem("vanta-name") || "Alex Morgan", status: localStorage.getItem("vanta-status") || "Here for the plot", about: localStorage.getItem("vanta-about") || "" };
   data = { ...seed }; document.querySelector("#miniName").textContent = profile.name; document.querySelector("#miniStatus").textContent = profile.status;
